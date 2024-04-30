@@ -26,13 +26,14 @@ contract RaffleTest is Test {
     uint32 callbackGasLimit;
     address link;
 
+
     address public PLAYER = makeAddr("player");
     uint256 public constant STARTING_USER_BALANCE = 10 ether;
     
     function setUp() external {
        DeployRaffle deployer = new DeployRaffle();
        (raffle, helperConfig) = deployer.run();
-       (entranceFee, interval, vrfCoordinator, gasLane, subscriptionId, callbackGasLimit, link ) = helperConfig.activeNetworkConfig();
+       (entranceFee, interval, vrfCoordinator, gasLane, subscriptionId, callbackGasLimit, link, ) = helperConfig.activeNetworkConfig();
        vm.deal(PLAYER, STARTING_USER_BALANCE);
     }
 
@@ -104,7 +105,7 @@ contract RaffleTest is Test {
     function testCheckUpkeepReturnsFalseIfEnoughTimeHasntPassed() public {
         vm.prank(PLAYER);
         raffle.enterRaffle{value: entranceFee}();
-        vm.warp(raffle.getInitialTimeStamp() + 29);
+        vm.warp(raffle.getLastTimeStamp() + 29);
         vm.roll(block.number + 1); 
         
         (bool upkeepNeeded, ) = raffle.checkUpkeep("");
@@ -114,7 +115,7 @@ contract RaffleTest is Test {
     function testCheckUpkeepReturnsTrueWhenParametersAreGood() public {
         vm.prank(PLAYER);
         raffle.enterRaffle{value: entranceFee}();
-        vm.warp(raffle.getInitialTimeStamp() + 31);
+        vm.warp(raffle.getLastTimeStamp() + 31);
         vm.roll(block.number + 1); 
         
         (bool upkeepNeeded, ) = raffle.checkUpkeep("");
@@ -158,7 +159,7 @@ contract RaffleTest is Test {
         _;
     }
 
-    function testPerformUpkeepUpdatesRaffleStateAndEmitsRequestId() public raffleEnteredAndTimePassed{
+    function testPerformUpkeepUpdatesRaffleStateAndEmitsRequestId() public raffleEnteredAndTimePassed {
         vm.recordLogs(); // get the values of all the events we emitted
         raffle.performUpkeep(""); //emit requestId
         Vm.Log[] memory entries = vm.getRecordedLogs(); // we'll get the requestId out of the ist of all the emitted events
@@ -167,18 +168,71 @@ contract RaffleTest is Test {
         // 1. in the vrfmock
         // 2. in the performupkeep function
         //  and we want to test for the second emitted event which is in index 1
-        bytes32 requestId = entries[1].topics[1];   
+        bytes32 requestId = entries[1].topics[1];  // this is how you get the requestid from an event 
         Raffle.RaffleState rState = raffle.getRaffleState();
 
         assert(uint256(rState) == 1);
         assert(uint256(requestId) > 0); //this will make sure that the requestId was actually generated
     }
+
     // fulfillRandomWords()
-    // Fuzz tests
-    function testFulfillRandomWordsCanOnlyBeCalledAfterPerformUpkeep() 
-    public raffleEnteredAndTimePassed {
-        //  Arrange
-        
+
+    modifier skipFork() { // this is to skip the fork if it's not on an anvil chain because fulfillRandomWords works totally differently from how it works on a real network
+        if(block.chainid != 31337) { //anvil chainid
+            return;
+        }
+        _;
     }
+    // Fuzz tests
+    // N.B: This test will be skipped when we are on a fork
+    function testFulfillRandomWordsCanOnlyBeCalledAfterPerformUpkeep(uint256 randomRequestId) 
+    public raffleEnteredAndTimePassed skipFork {
+        //  Arrange
+        vm.expectRevert("nonexistent request");
+        VRFCoordinatorV2Mock(vrfCoordinator).fulfillRandomWords(randomRequestId, address(raffle)); // this is a fuzz test, because it is testing for multiple cases
+        // now, the rzn why we have to mock the chainlink vrf is because on our local chain there's no chainlink vrf. So on a real testnet, this is not gonna work 
+        // cos we are not the chainlink vrf and we cant call fulfillRandom words, only the chainlink node can
+    }
+
+    function testFulfillRandomWordsPicksAWinnerResetsAndSendsMoney() 
+    public raffleEnteredAndTimePassed skipFork {
+    //    Arrange
+    uint256 additionalEntrants = 5;
+    uint256 startingIndex = 1; // because one person has already entered the contract from the modifier, I think
+
+    for(uint256 i = startingIndex; i < startingIndex + additionalEntrants; i++) {
+        address player = address(uint160(i)); // this is to say an address should be generated for each of the numbers 
+        hoax(player, STARTING_USER_BALANCE); // prank + deal = dont forget 
+        raffle.enterRaffle{value: entranceFee}(); // each player enters the raffle here
+    }
+
+        uint256 prize = entranceFee * (additionalEntrants + 1); // to get the prize the winner won
+
+        vm.recordLogs(); // get the values of all the events we emitted
+        raffle.performUpkeep(""); //emit requestId
+        Vm.Log[] memory entries = vm.getRecordedLogs(); // we'll get the requestId out of the ist of all the emitted events
+        // all vm.logs are recorded as bytes32 in foundry
+        // now, since we know that there are two events to be emitted here: 
+        // 1. in the vrfmock
+        // 2. in the performupkeep function
+        //  and we want to test for the second emitted event which is in index 1
+        bytes32 requestId = entries[1].topics[1]; // this will serve as the consumer
+        // here we are going to pretend to be chainlink vrf to get a random number and pick a winner. I think this is because test runs on a local chain and there's no chainlink vrf on local
+        // we'll call the fulfillRandomWords function from the mock,
+        
+        uint256 previousTimeStamp = raffle.getLastTimeStamp();
+        
+        VRFCoordinatorV2Mock(vrfCoordinator).fulfillRandomWords(
+            uint256(requestId), 
+            address(raffle) // this is the consumer
+        );
+
+        // Assert
+        assert(uint256(raffle.getRaffleState()) == 0); // the raffle state resolves to open
+        assert(raffle.getRecentWinner() != address(0)); // the winner's address is populated
+        assert(raffle.getLengthOfPlayers() == 0);
+        assert(previousTimeStamp < raffle.getLastTimeStamp());
+        assert(raffle.getRecentWinner().balance == STARTING_USER_BALANCE + prize - entranceFee); // the winner had a balance before, then he won a prize which adds to it, but entranceFee has been paid from the starting user balance, so we have subtract it     
+    } 
 
 }

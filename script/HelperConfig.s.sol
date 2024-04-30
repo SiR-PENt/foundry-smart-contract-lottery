@@ -17,7 +17,10 @@ contract HelperConfig is Script {
         uint64 subscriptionId; 
         uint32 callbackGasLimit;
         address link; 
+        uint256 deployerKey;
     }
+
+    uint256 public constant DEFAULT_ANVIL_KEY = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
     NetworkConfig public activeNetworkConfig;
 
@@ -30,7 +33,7 @@ contract HelperConfig is Script {
         }
     }
 
-    function getSepoliaEthConfig() public pure returns (NetworkConfig memory) {
+    function getSepoliaEthConfig() public view returns (NetworkConfig memory) {
         return NetworkConfig({
             entranceFee: 0.01 ether,
             interval: 30,
@@ -38,7 +41,9 @@ contract HelperConfig is Script {
             gasLane: 0x8af398995b04c28e9951adb9721ef74c74f93e6a478f39e7e0777be13527e7ef,
             subscriptionId: 0, // we are gonna update this with the subId layher
             callbackGasLimit: 500000, // 500,000 should be more than enough
-            link: 0x779877A7B0D9E8603169DdbD7836e478b4624789 //address to get link token on sepolia
+            link: 0x779877A7B0D9E8603169DdbD7836e478b4624789, //address to get link token on sepolia
+            deployerKey: vm.envUint("PRIVATE KEY") // get the private key from .env file
+            // we need the deployer key because for the fork-url 
         });
     }
 
@@ -46,7 +51,7 @@ contract HelperConfig is Script {
         if(activeNetworkConfig.vrfCoordinator != address(0)) {
             return activeNetworkConfig;
         } // this condition is checking if activeNetworkConfig has been populated before running any mock
-        
+
         uint96 baseFee = 0.25 ether; //0.25 LINK: this is the amount in gas you pay anytime the chainlink nodes call fulfill random words
         uint96 gasPriceLink = 1e9; // this is where the baseFee gets reimbursed from 
         vm.startBroadcast();
@@ -61,7 +66,8 @@ contract HelperConfig is Script {
             gasLane: 0x8af398995b04c28e9951adb9721ef74c74f93e6a478f39e7e0777be13527e7ef,
             subscriptionId: 0, // we are gonna update this with the subId layher
             callbackGasLimit: 500000, // 500,000 should be more than enough
-            link: address(link)
+            link: address(link),
+            deployerKey: DEFAULT_ANVIL_KEY
         });
     }
    
